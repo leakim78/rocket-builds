@@ -1,0 +1,22 @@
+# Temporary files
+*.tmp
+*.log
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# Build artifacts (we want to track actual JARs but not build temps)
+target/
+build/
+dist/
+*.class
+
+# OS files
+.DS_Store
+ehthumbs.db
+Desktop.ini

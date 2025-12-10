@@ -1,0 +1,149 @@
+name: Sync Releases from Rocket Repo
+
+on:
+  # Trigger manually
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: 'Source repository (owner/repo)'
+        required: true
+        default: 'leakim78/rocket'
+      tag_name:
+        description: 'Tag name to fetch (leave empty for latest)'
+        required: false
+        default: ''
+  
+  # Trigger on schedule to check for new releases
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  sync-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up environment
+        run: |
+          SOURCE_REPO="${{ github.event.inputs.source_repo || 'leakim78/rocket' }}"
+          echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
+      
+      - name: Fetch latest release from source repo
+        id: get_release
+        run: |
+          TAG_NAME="${{ github.event.inputs.tag_name }}"
+          
+          if [ -z "$TAG_NAME" ]; then
+            # Get the latest release
+            RELEASE_DATA=$(curl -s -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${SOURCE_REPO}/releases/latest")
+            TAG_NAME=$(echo "$RELEASE_DATA" | jq -r '.tag_name')
+            RELEASE_NAME=$(echo "$RELEASE_DATA" | jq -r '.name')
+            RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body')
+          else
+            # Get specific release by tag
+            RELEASE_DATA=$(curl -s -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${SOURCE_REPO}/releases/tags/${TAG_NAME}")
+            RELEASE_NAME=$(echo "$RELEASE_DATA" | jq -r '.name')
+            RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body')
+          fi
+          
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          echo "${RELEASE_BODY}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Get download URLs for JAR files
+          DOWNLOAD_URLS=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url')
+          echo "download_urls<<EOF" >> $GITHUB_OUTPUT
+          echo "${DOWNLOAD_URLS}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Check if release already exists
+        id: check_release
+        run: |
+          TAG_NAME="${{ steps.get_release.outputs.tag_name }}"
+          
+          # Check if tag exists locally
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release $TAG_NAME already exists, skipping..."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Download JAR files
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          mkdir -p downloads
+          
+          URLS="${{ steps.get_release.outputs.download_urls }}"
+          
+          if [ -z "$URLS" ]; then
+            echo "No JAR files found in the release"
+            exit 0
+          fi
+          
+          echo "$URLS" | while read -r url; do
+            if [ -n "$url" ]; then
+              echo "Downloading: $url"
+              curl -L -o "downloads/$(basename "$url")" "$url"
+            fi
+          done
+          
+          ls -lh downloads/
+      
+      - name: Copy JARs to releases directory
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          TAG_NAME="${{ steps.get_release.outputs.tag_name }}"
+          
+          if [ -d "downloads" ] && [ "$(ls -A downloads/*.jar 2>/dev/null)" ]; then
+            mkdir -p "releases/${TAG_NAME}"
+            cp downloads/*.jar "releases/${TAG_NAME}/"
+            
+            echo "JAR files copied to releases/${TAG_NAME}/"
+            ls -lh "releases/${TAG_NAME}/"
+          else
+            echo "No JAR files to copy"
+          fi
+      
+      - name: Create release
+        if: steps.check_release.outputs.exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.get_release.outputs.tag_name }}"
+          RELEASE_NAME="${{ steps.get_release.outputs.release_name }}"
+          RELEASE_BODY="${{ steps.get_release.outputs.release_body }}"
+          
+          # Commit and push changes
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [ -d "releases/${TAG_NAME}" ] && [ "$(ls -A releases/${TAG_NAME}/*.jar 2>/dev/null)" ]; then
+            git add releases/
+            git commit -m "Add release ${TAG_NAME}" || echo "No changes to commit"
+            git push || echo "Push completed"
+          fi
+          
+          # Create GitHub release with JAR files
+          if [ -d "downloads" ] && [ "$(ls -A downloads/*.jar 2>/dev/null)" ]; then
+            # Create release
+            gh release create "${TAG_NAME}" \
+              --title "${RELEASE_NAME}" \
+              --notes "Automated build from source repository ${SOURCE_REPO}
+
+${RELEASE_BODY}
+
+---
+*This release was automatically synced from the [rocket repository](https://github.com/${SOURCE_REPO}).*" \
+              downloads/*.jar
+          else
+            echo "No JAR files to attach to release"
+          fi

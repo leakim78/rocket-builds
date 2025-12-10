@@ -129,7 +129,7 @@ jobs:
           if [ -d "releases/${TAG_NAME}" ] && [ "$(ls -A releases/${TAG_NAME}/*.jar 2>/dev/null)" ]; then
             git add releases/
             git commit -m "Add release ${TAG_NAME}" || echo "No changes to commit"
-            git push origin main || git push origin master || echo "Push completed"
+            git push || echo "Push completed"
           fi
           
           # Create GitHub release with JAR files

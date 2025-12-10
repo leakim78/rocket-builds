@@ -1,0 +1,66 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+      release_notes:
+        description: 'Release notes'
+        required: false
+        default: 'New release'
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create release structure
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          mkdir -p "releases/v${VERSION}"
+          
+          # Create a placeholder file
+          cat > "releases/v${VERSION}/README.md" << EOF
+          # Release v${VERSION}
+          
+          Place your fat-JAR files in this directory.
+          
+          After adding the JAR files:
+          1. Commit the changes
+          2. Create a GitHub release
+          3. Attach the JAR files to the release
+          EOF
+          
+          cat "releases/v${VERSION}/README.md"
+      
+      - name: Commit changes
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add releases/
+          git commit -m "Prepare release v${VERSION}" || echo "No changes to commit"
+          git push
+      
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          RELEASE_NOTES="${{ github.event.inputs.release_notes }}"
+          
+          gh release create "v${VERSION}" \
+            --title "Release v${VERSION}" \
+            --notes "${RELEASE_NOTES}
+
+---
+*To complete this release, upload the fat-JAR file(s) to this release.*"
